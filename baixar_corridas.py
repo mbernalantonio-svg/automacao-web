@@ -1,7 +1,6 @@
 import os
 import re
 import json
-import base64
 from pathlib import Path
 from datetime import datetime
 from playwright.sync_api import sync_playwright
@@ -42,16 +41,10 @@ def save_state(processed_ids: set):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(sorted(list(processed_ids)), f, indent=2)
 
-def salvar_html(html_conteudo: str, caminho_html: Path):
-    caminho_html.parent.mkdir(parents=True, exist_ok=True)
-    with open(caminho_html, "w", encoding="utf-8") as f:
-        f.write(html_conteudo)
-
 def process_results():
     processed_ids = load_state()
     BASE_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Detecta se está rodando no GitHub Actions / CI para ligar headless
     is_ci = os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
 
     with sync_playwright() as p:
@@ -93,35 +86,6 @@ def process_results():
         total_rows = rows.count()
         print(f">> Total de linhas na tabela: {total_rows}")
 
-        payload_atual = {"conteudo": ""}
-
-        def handle_response(response):
-            try:
-                url_low = response.url.lower()
-                if any(x in url_low for x in ["resultado", "pista", "obterresultadopista", "print"]):
-                    if response.status == 200:
-                        ct = response.headers.get("content-type", "")
-                        if "json" in ct:
-                            data = response.json()
-                            content = None
-                            if isinstance(data, dict):
-                                nested = data.get("data", {})
-                                if isinstance(nested, dict):
-                                    content = nested.get("content") or nested.get("data", {}).get("content")
-                                elif isinstance(nested, str):
-                                    content = nested
-                            if content:
-                                try:
-                                    decoded = base64.b64decode(content).decode("utf-8", errors="replace")
-                                    payload_atual["conteudo"] = decoded
-                                except Exception:
-                                    pass
-                        elif "html" in ct or "text" in ct:
-                            payload_atual["conteudo"] = response.text()
-            except Exception:
-                pass
-
-        page.on("response", handle_response)
         novos_arquivos = 0
 
         for i in range(total_rows):
@@ -157,25 +121,24 @@ def process_results():
                 if item_chave in processed_ids:
                     continue
 
-                print(f">> Coletando {tipo} da Corrida #{corrida_id} ({data_iso})...")
-                payload_atual["conteudo"] = ""
+                print(f">> Gerando PDF de {tipo} da Corrida #{corrida_id} ({data_iso})...")
 
                 btn.first.click()
                 page.wait_for_timeout(2500)
 
-                html_resultado = payload_atual["conteudo"]
-                if not html_resultado:
-                    modal = page.locator("[role='dialog'], .modal, .MuiDialog-root, [class*='dialog']")
-                    if modal.count() > 0:
-                        html_resultado = modal.first.inner_html()
+                # Localiza o modal/área do relatório
+                modal = page.locator("[role='dialog'], .modal, .MuiDialog-root, [class*='dialog']")
+                caminho_pdf = pasta_destino / f"{tipo}_{data_iso}_#{corrida_id}.pdf"
 
-                if html_resultado:
-                    caminho_html = pasta_destino / f"{tipo}_{data_iso}_#{corrida_id}.html"
-                    salvar_html(html_resultado, caminho_html)
-                    print(f"   [OK] Salvo: {caminho_html.name}")
+                try:
+                    # Em modo headless, o Playwright gera o PDF direto da visualização
+                    page.pdf(path=str(caminho_pdf), format="A4", print_background=True)
+                    print(f"   [OK] Salvo em PDF: {caminho_pdf.name}")
                     processed_ids.add(item_chave)
                     novos_arquivos += 1
                     linha_processou_algo = True
+                except Exception as e:
+                    print(f"   [AVISO] Falha ao imprimir PDF: {e}")
 
                 try:
                     btn_fechar = page.locator("button:has-text('Fechar'), button[aria-label='Close'], button:has-text('OK')")
@@ -191,7 +154,7 @@ def process_results():
                 save_state(processed_ids)
 
         save_state(processed_ids)
-        print(f"\n>> Concluído! Total de {novos_arquivos} arquivos HTML gerados com sucesso.")
+        print(f"\n>> Concluído! Total de {novos_arquivos} arquivos PDF gerados com sucesso.")
         browser.close()
 
 if __name__ == "__main__":
