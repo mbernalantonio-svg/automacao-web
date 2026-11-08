@@ -6,16 +6,26 @@ from pathlib import Path
 from datetime import datetime
 from playwright.sync_api import sync_playwright
 
-EMAIL = "mbernalantonio@hotmail.com"
-SENHA = "Mba@190313"
-BASE_DIR = Path(r"C:\Users\mbern\OneDrive\kart")
+# Credenciais e caminhos com suporte a variáveis de ambiente (GitHub Actions / Local)
+EMAIL = os.getenv("KGV_EMAIL", "mbernalantonio@hotmail.com")
+SENHA = os.getenv("KGV_PASSWORD", "Mba@190313")
+BASE_DIR = Path(os.getenv("OUTPUT_DIR", r"C:\Users\mbern\OneDrive\kart"))
 STATE_FILE = BASE_DIR / ".downloaded_results.json"
 BASE_URL = "https://reservas.kartodromogranjaviana.com.br/reservaonline/"
 
 TIPOS_BOTOES = [
-    {"tipo": "Prova", "seletor": "button[title='Visualizar Prova'], button:has-text('Visualizar Prova')"},
-    {"tipo": "Tomada", "seletor": "button[title='Visualizar Tomada'], button:has-text('Visualizar Tomada')"},
-    {"tipo": "Volta_a_Volta", "seletor": "button[title='Visualizar Volta-a-Volta'], button:has-text('Visualizar Volta-a-Volta'), button:has-text('Volta a Volta')"}
+    {
+        "tipo": "Prova",
+        "seletor": "button[title='Visualizar Prova'], button:has-text('Visualizar Prova')"
+    },
+    {
+        "tipo": "Tomada",
+        "seletor": "button[title='Visualizar Tomada'], button:has-text('Visualizar Tomada')"
+    },
+    {
+        "tipo": "Volta_a_Volta",
+        "seletor": "button[title='Visualizar Volta-a-Volta'], button:has-text('Visualizar Volta-a-Volta'), button:has-text('Volta a Volta')"
+    }
 ]
 
 def load_state() -> set:
@@ -32,28 +42,27 @@ def save_state(processed_ids: set):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(sorted(list(processed_ids)), f, indent=2)
 
-def salvar_pdf(print_page, html_conteudo: str, caminho_pdf: Path):
-    print_page.set_content(html_conteudo, wait_until="load")
-    print_page.add_style_tag(content="""
-        @page { size: A4 landscape; margin: 8mm; }
-        body { font-family: Arial, sans-serif; -webkit-print-color-adjust: exact; background-color: #fff; }
-        table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
-        th, td { border: 1px solid #ccc; padding: 4px; font-size: 11px; text-align: left; }
-    """)
-    print_page.pdf(
-        path=str(caminho_pdf),
-        format="A4",
-        landscape=True,
-        print_background=True
-    )
+def salvar_html(html_conteudo: str, caminho_html: Path):
+    caminho_html.parent.mkdir(parents=True, exist_ok=True)
+    with open(caminho_html, "w", encoding="utf-8") as f:
+        f.write(html_conteudo)
 
 def process_results():
     processed_ids = load_state()
     BASE_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Detecta se está rodando no GitHub Actions / CI para ligar headless
+    is_ci = os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
-        context = browser.new_context(viewport={"width": 1600, "height": 900})
+        browser = p.chromium.launch(
+            headless=is_ci,
+            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+        )
+        context = browser.new_context(
+            viewport={"width": 1600, "height": 900},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        )
         page = context.new_page()
 
         print(">> Acessando o portal do Kartódromo Granja Viana...")
@@ -114,7 +123,6 @@ def process_results():
 
         page.on("response", handle_response)
         novos_arquivos = 0
-        print_page = context.new_page()
 
         for i in range(total_rows):
             row = rows.nth(i)
@@ -162,14 +170,13 @@ def process_results():
                         html_resultado = modal.first.inner_html()
 
                 if html_resultado:
-                    caminho_pdf = pasta_destino / f"{tipo}_{data_iso}_#{corrida_id}.pdf"
-                    salvar_pdf(print_page, html_resultado, caminho_pdf)
-                    print(f"   [OK] Salvo: {caminho_pdf.name}")
+                    caminho_html = pasta_destino / f"{tipo}_{data_iso}_#{corrida_id}.html"
+                    salvar_html(html_resultado, caminho_html)
+                    print(f"   [OK] Salvo: {caminho_html.name}")
                     processed_ids.add(item_chave)
                     novos_arquivos += 1
                     linha_processou_algo = True
 
-                # Fechar o modal após capturar o relatório
                 try:
                     btn_fechar = page.locator("button:has-text('Fechar'), button[aria-label='Close'], button:has-text('OK')")
                     if btn_fechar.count() > 0 and btn_fechar.first.is_visible():
@@ -184,7 +191,7 @@ def process_results():
                 save_state(processed_ids)
 
         save_state(processed_ids)
-        print(f"\n>> Concluído! Total de {novos_arquivos} arquivos PDF gerados com sucesso.")
+        print(f"\n>> Concluído! Total de {novos_arquivos} arquivos HTML gerados com sucesso.")
         browser.close()
 
 if __name__ == "__main__":
