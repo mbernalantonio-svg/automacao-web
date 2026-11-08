@@ -1,7 +1,8 @@
-﻿name: Sincronizar Corridas KGV
+name: Sincronizar Corridas KGV
 
 on:
   schedule:
+    # Executa todos os domingos e segundas às 03:00 UTC (00:00 Horário de Brasília)
     - cron: '0 3 * * 0,1'
   workflow_dispatch:
 
@@ -24,10 +25,12 @@ jobs:
           playwright install --with-deps chromium
 
       - name: Configurar Rclone
+        env:
+          RCLONE_CONFIG: ${{ secrets.RCLONE_CONFIG_DATA }}
         run: |
           sudo apt-get update && sudo apt-get install -y rclone
           mkdir -p ~/.config/rclone
-          echo "${{ secrets.RCLONE_CONFIG_DATA }}" > ~/.config/rclone/rclone.conf
+          python -c 'import os; open(os.path.expanduser("~/.config/rclone/rclone.conf"), "w", encoding="utf-8").write(os.environ.get("RCLONE_CONFIG", "").strip() + "\n")'
 
       - name: Descarregar estado atual do OneDrive
         run: |
@@ -42,6 +45,6 @@ jobs:
         run: |
           python baixar_corridas.py
 
-      - name: Sincronizar novos PDFs com o OneDrive
+      - name: Sincronizar novos arquivos com o OneDrive
         run: |
           rclone copy ./downloads_kart/ "onedrive:kart/" --update --verbose
