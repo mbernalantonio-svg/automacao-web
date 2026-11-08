@@ -1,0 +1,47 @@
+﻿name: Sincronizar Corridas KGV
+
+on:
+  schedule:
+    - cron: '0 3 * * 0,1'
+  workflow_dispatch:
+
+jobs:
+  scrape-and-sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Configurar Rclone
+        run: |
+          sudo apt-get update && sudo apt-get install -y rclone
+          mkdir -p ~/.config/rclone
+          echo "${{ secrets.RCLONE_CONFIG_DATA }}" > ~/.config/rclone/rclone.conf
+
+      - name: Descarregar estado atual do OneDrive
+        run: |
+          mkdir -p ./downloads_kart
+          rclone copy "onedrive:kart/.downloaded_results.json" ./downloads_kart/ || true
+
+      - name: Executar Scraper
+        env:
+          KGV_EMAIL: ${{ secrets.KGV_EMAIL }}
+          KGV_PASSWORD: ${{ secrets.KGV_PASSWORD }}
+          OUTPUT_DIR: "./downloads_kart"
+        run: |
+          python baixar_corridas.py
+
+      - name: Sincronizar novos PDFs com o OneDrive
+        run: |
+          rclone copy ./downloads_kart/ "onedrive:kart/" --update --verbose
